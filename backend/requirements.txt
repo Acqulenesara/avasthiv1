@@ -8,3 +8,4 @@ chromadb
 nltk
 passlib[bcrypt]
 python-jose
+jwt
