@@ -9,3 +9,5 @@ nltk
 passlib[bcrypt]
 python-jose
 jwt
+sentence_transformers
+torch
