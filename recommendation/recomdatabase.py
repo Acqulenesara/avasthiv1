@@ -2,7 +2,7 @@ import sqlite3
 
 
 def init_db():
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("../users.db")
     cursor = conn.cursor()
 
     # Create users table
@@ -30,7 +30,7 @@ def init_db():
 
 # Register User
 def register_user(username, password, interests):
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("../users.db")
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO users (username, password, interests) VALUES (?, ?, ?)",
@@ -45,7 +45,7 @@ def register_user(username, password, interests):
 
 # Authenticate User
 def authenticate_user(username, password):
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("../users.db")
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
     user = cursor.fetchone()
@@ -54,7 +54,7 @@ def authenticate_user(username, password):
 
 
 def get_user_data(username):
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("../users.db")
     cursor = conn.cursor()
     cursor.execute("SELECT interests, stress_level FROM users WHERE username = ?", (username,))
     result = cursor.fetchone()
@@ -69,7 +69,7 @@ def get_user_data(username):
 
 # Check if a PDF is indexed
 def check_pdf_indexed(pdf_id):
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("../users.db")
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM indexed_pdfs WHERE pdf_id = ?", (pdf_id,))
     result = cursor.fetchone()
@@ -79,7 +79,7 @@ def check_pdf_indexed(pdf_id):
 
 # Add a new indexed PDF
 def add_indexed_pdf(pdf_id):
-    conn = sqlite3.connect("users.db")
+    conn = sqlite3.connect("../users.db")
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO indexed_pdfs (pdf_id) VALUES (?)", (pdf_id,))

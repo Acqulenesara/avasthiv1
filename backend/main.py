@@ -48,7 +48,7 @@ EMBED_MODEL = "all-MiniLM-L6-v2"
 embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
 
 # Initialize ChromaDB with embedding functions
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
+chroma_client = chromadb.PersistentClient(path="../chroma_db")
 collection_name = "pdf_text_collection"
 collection = chroma_client.get_or_create_collection(name=collection_name, embedding_function=embedding_func)
 
@@ -62,37 +62,49 @@ assistant = client.beta.assistants.create(
 )
 thread = client.beta.threads.create()
 
-# SQLite Database Setup
-conn = sqlite3.connect("users.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password TEXT
-    )
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS interactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT,
-        query TEXT,
-        response TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS lifestyle (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT,
-        sleep TEXT,
-        exercise TEXT,
-        diet TEXT,
-        social TEXT,
-        work_life_balance TEXT
-    )
-""")
-conn.commit()
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+mongo_client = AsyncIOMotorClient(MONGO_URI)
+db = mongo_client["mental_health_bot"]
+users_collection = db["users"]
+interactions_collection = db["interactions"]
+lifestyle_collection = db["lifestyle"]
+
+
+#
+# # SQLite Database Setup
+# conn = sqlite3.connect("users.db", check_same_thread=False)
+# cursor = conn.cursor()
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS users (
+#         id INTEGER PRIMARY KEY AUTOINCREMENT,
+#         username TEXT UNIQUE,
+#         password TEXT
+#     )
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS interactions (
+#         id INTEGER PRIMARY KEY AUTOINCREMENT,
+#         username TEXT,
+#         query TEXT,
+#         response TEXT,
+#         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+#     )
+# """)
+# cursor.execute("""
+#     CREATE TABLE IF NOT EXISTS lifestyle (
+#         id INTEGER PRIMARY KEY AUTOINCREMENT,
+#         username TEXT,
+#         sleep TEXT,
+#         exercise TEXT,
+#         diet TEXT,
+#         social TEXT,
+#         work_life_balance TEXT
+#     )
+# """)
+# conn.commit()
 
 # Password Hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -118,28 +130,24 @@ class UserRegister(BaseModel):
     username: str
     password: str
 
-
-@app.post("/register",include_in_schema=True)
-def register_user(user: UserRegister):
-
-    hashed_password = get_password_hash(user.password)
-    try:
-        cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (user.username, hashed_password))
-        conn.commit()
-        return {"message": "User registered successfully"}
-    except sqlite3.IntegrityError:
+@app.post("/register")
+async def register_user(user: UserRegister):
+    if await users_collection.find_one({"username": user.username}):
         raise HTTPException(status_code=400, detail="Username already exists")
+    hashed_password = get_password_hash(user.password)
+    await users_collection.insert_one({
+        "username": user.username,
+        "password": hashed_password
+    })
+    return {"message": "User registered successfully"}
 
 
-@app.post("/token",include_in_schema=True)
-def login(form_data: OAuth2PasswordRequestForm = Depends()):
-
-    cursor.execute("SELECT password FROM users WHERE username = ?", (form_data.username,))
-    user = cursor.fetchone()
-    if not user or not verify_password(form_data.password, user[0]):
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = await users_collection.find_one({"username": form_data.username})
+    if not user or not verify_password(form_data.password, user["password"]):
         raise HTTPException(status_code=400, detail="Incorrect username or password")
-    access_token = create_access_token(data={"sub": form_data.username},
-                                       expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    access_token = create_access_token(data={"sub": user["username"]})
     return {"access_token": access_token, "token_type": "bearer"}
 
 
@@ -213,7 +221,7 @@ async def handle_query(payload: QueryPayload, token: str = Depends(oauth2_scheme
         sentiment_instruction = {
             "positive": "Maintain an engaging and encouraging tone.",
             "neutral": "Respond normally with helpful advice.",
-            "negative": "Use a compassionate and supportive tone. Offer stress-relief tips briefly."
+            "negative": "Use a compassionate and supportive tone. Offer stress-relief tips briefly.Keep it short."
         }.get(sentiment, "Respond normally.Be concise and to the point.")
 
         # Create a message in the thread
@@ -234,9 +242,12 @@ async def handle_query(payload: QueryPayload, token: str = Depends(oauth2_scheme
 
         return {"thread_id": current_thread_id, "response": response_text}
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
+    except Exception as e:
+        import traceback
+        print("❌ Error in /query:")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
 
 
 # Print available routes properly

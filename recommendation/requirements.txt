@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+requests
+python-dotenv
+openai
+chromadb
+PyPDF2
+nltk
+sentence-transformers

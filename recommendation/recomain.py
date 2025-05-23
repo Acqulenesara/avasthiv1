@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, Depends, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 import os
@@ -6,7 +6,7 @@ import requests
 import chromadb
 from chromadb.utils import embedding_functions
 from collections import Counter
-import recomdatabase  # Your existing recomdatabase module
+from recommendation import recomdatabase
 import openai
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
@@ -31,7 +31,7 @@ embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
 )
 
 # Initialize ChromaDB client
-chroma_client = chromadb.PersistentClient(path="./chroma_recommendation_db")
+chroma_client = chromadb.PersistentClient(path="../chroma_recommendation_db")
 
 # Define ChromaDB collection with embedding function
 collection_name = "pdf_keywords_collection"
@@ -53,7 +53,7 @@ except Exception as e:
     print(f"⚠ OpenAI integration disabled: {e}")
 
 # Predefined PDF path
-PDF_PATH = "The_Stress_Management.pdf"  # <-- Hardcoded PDF path
+PDF_PATH = "../backend/The_Stress_Management.pdf"  # <-- Hardcoded PDF path
 
 # Lazy loading NLTK data
 def download_nltk_data():
@@ -78,7 +78,6 @@ def download_nltk_data():
 download_nltk_data()
 
 # Initialize stopwords and lemmatizer
-import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
@@ -209,8 +208,6 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
-from fastapi import Query
-from typing import List
 #import requests
 #from collections import Counter
 

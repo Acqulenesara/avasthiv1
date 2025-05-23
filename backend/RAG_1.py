@@ -18,7 +18,7 @@ embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
 )
 
 # Initialize ChromaDB client
-chroma_client = chromadb.PersistentClient(path="./chroma_db")  # Saves the database locally
+chroma_client = chromadb.PersistentClient(path="../chroma_db")  # Saves the database locally
 
 # Define ChromaDB collection with an embedding function
 collection_name = "pdf_text_collection"
