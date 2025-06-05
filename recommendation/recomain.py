@@ -6,7 +6,7 @@ import requests
 import chromadb
 from chromadb.utils import embedding_functions
 from collections import Counter
-from recommendation import recomdatabase
+import recomdatabase
 import openai
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader

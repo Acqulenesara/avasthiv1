@@ -1,147 +1,167 @@
-import os
-import chromadb
-from chromadb.utils import embedding_functions
 import PyPDF2
-import nltk
-from nltk.tokenize import sent_tokenize
+import os
+import openai
+from pinecone import Pinecone, ServerlessSpec
 
-# Download necessary NLTK data
-nltk.download("punkt")
 
-# Ensure correct ChromaDB version
-print(f"ChromaDB Version: {chromadb.__version__}")  # Should be >= 0.4.14
+import os
+from dotenv import load_dotenv
 
-# Define embedding function using SentenceTransformers
-EMBED_MODEL = "all-MiniLM-L6-v2"  # Use a model optimized for semantic search
-embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name=EMBED_MODEL
-)
+load_dotenv()  # Loads the .env file variables into environment variables
 
-# Initialize ChromaDB client
-chroma_client = chromadb.PersistentClient(path="../chroma_db")  # Saves the database locally
+os.environ["OPENAI_API_KEY"]= os.getenv("OPENAI_API_KEY")
+api_key= os.getenv("PINECONE_API_KEY")
+cloud_region= os.getenv("PINECONE_ENVIRONMENT")
 
-# Define ChromaDB collection with an embedding function
-collection_name = "pdf_text_collection"
-collection = chroma_client.get_or_create_collection(
-    name=collection_name,
-    embedding_function=embedding_func  # Ensure embeddings are used correctly
-)
 
+# Load the PDF file
+pdf_file = "C:/Users/acqul/PycharmProjects/avasthi/backend/The_Stress_Management.pdf"  # Replace with the actual path to your PDF file
 
 # Function to extract text from a PDF
 def extract_text_from_pdf(pdf_file):
-    """Extracts text from a PDF file."""
     with open(pdf_file, "rb") as f:
         reader = PyPDF2.PdfReader(f)
-        text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
-    return text.strip()
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text()
+    return text
 
+# Extract text from the PDF
+pdf_text = extract_text_from_pdf(pdf_file)
+
+# Split the text into chunks for embedding (optional, depending on the PDF's length)
+# You can split it into smaller chunks if needed, based on the text length.
+ # If you want to keep the entire text as a single chunk
+
+# Initialize OpenAI
+openai.api_key = os.environ["OPENAI_API_KEY"]
+
+# Function to generate embeddings
+
+import openai
+from nltk.tokenize import sent_tokenize
+import nltk
+nltk.download('punkt')
+import nltk
+nltk.download('punkt_tab')
 
 # Function to split text into chunks based on token limits
 def split_text(text, max_tokens=4000):
-    """Splits text into smaller chunks for embedding."""
     sentences = sent_tokenize(text)
-    chunks, current_chunk, current_tokens = [], [], 0
+    chunks = []
+    current_chunk = []
+    current_tokens = 0
 
     for sentence in sentences:
+        # Estimate token count by counting words as a proxy
         sentence_tokens = len(sentence.split())
 
         if current_tokens + sentence_tokens > max_tokens:
+            # If adding the sentence exceeds the token limit, create a new chunk
             chunks.append(" ".join(current_chunk))
-            current_chunk, current_tokens = [sentence], sentence_tokens
+            current_chunk = [sentence]
+            current_tokens = sentence_tokens
         else:
             current_chunk.append(sentence)
             current_tokens += sentence_tokens
 
+    # Add the last chunk
     if current_chunk:
         chunks.append(" ".join(current_chunk))
 
     return chunks
 
-
-# Function to generate embeddings using SentenceTransformer
-def generate_embedding(text):
-    """Generates embedding for a text chunk using SentenceTransformer."""
-    try:
-        embedding = embedding_func([text])  # Generate embedding using SentenceTransformer
-        if embedding is not None and len(embedding) > 0:
-            return embedding[0]  # Return the first (and only) embedding
-        else:
-            print("⚠️ No embedding generated!")
-            return None
-    except Exception as e:
-        print(f"❌ Error generating embedding: {e}")
-        return None
+# Function to generate embeddings
 
 
-# Function to check stored documents in ChromaDB
-def debug_collection():
-    """Prints stored document metadata and embeddings to verify insertion."""
-    docs = collection.get(include=["metadatas", "embeddings"])  # Include embeddings
-    stored_meta = docs.get("metadatas", [])
-    stored_embeddings = docs.get("embeddings", [])
-
-    print(f"📌 Stored Document Count: {len(stored_meta)}")
-
-    # Show only first 2 stored metadata and embeddings for debugging
-    for i, (meta, embedding) in enumerate(zip(stored_meta[:2], stored_embeddings[:2])):
-        print(f"\n🗂️ Metadata {i + 1}: {meta}")
-        print(f"🔢 Embedding {i + 1} (First 5 values): {embedding[:5]} ... [truncated]")
+import openai
 
 
-# Load the PDF file
-pdf_file = "/Users/acqul/PycharmProjects/avasthi/The_Stress_Management.pdf"  # Update path
+def generate_embeddings(texts, model="text-embedding-ada-002"):
+    embeddings = []
 
-# Extract text from the PDF
-pdf_text = extract_text_from_pdf(pdf_file)
+    for text in texts:
+        try:
+            # Request embeddings from OpenAI API using the new interface
+            response = openai.embeddings.create(input=[text], model=model)
 
-# Split text into chunks
+            # Extract the embedding from the response
+            embedding = response.data[0].embedding
+
+            embeddings.append(embedding)
+
+        except Exception as e:
+            print(f"Error generating embedding for text: {text[:50]}... - {e}")
+            embeddings.append(None)
+
+    return embeddings
+
+
 texts = split_text(pdf_text)
+# Generate embeddings
+print("Generating embeddings...")
+embeddings = generate_embeddings(texts)
 
-# Upsert into ChromaDB with embeddings
-print("🔄 Generating embeddings and storing in ChromaDB...")
-for i, text in enumerate(texts):
-    embedding = generate_embedding(text)
-    if embedding is not None:  # Ensure embedding is valid
-        collection.add(
-            ids=[f"pdf-text-{i}"],
-            embeddings=[embedding],
-            metadatas=[{"text": text}]
+# Prepare data with metadata
+data_to_upsert = []
+for i, (text, embedding) in enumerate(zip(texts, embeddings)):
+    if embedding is not None:  # Skip failed embeddings
+        metadata = {"text": text}  # Add any additional metadata fields here
+        data_to_upsert.append({"id": f"pdf-text-{i}", "values": embedding, "metadata": metadata})
+
+# Initialize Pinecone
+embedding_dimension = 1536  # Match the embedding model's dimension
+index_name = "newindex"
+
+pc = Pinecone(api_key=api_key)
+
+# Check if the index exists, and create it if it doesn't
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        name=index_name,
+        dimension=embedding_dimension,
+        metric='cosine',  # Use 'cosine', 'dotproduct', or 'euclidean'
+        spec=ServerlessSpec(
+            cloud="aws",
+            region=cloud_region.split("-")[1]
         )
-        print(f"✅ Stored chunk {i}: {text[:50]}...")  # Print first 50 chars of each stored chunk
-
-print(f"✅ Successfully stored {len(texts)} text chunks in ChromaDB!")
-
-# Debug: Check if documents were stored correctly
-debug_collection()
-
-
-# Function to search similar text using ChromaDB
-def search_similar_text(query_text, top_k=3):
-    """Searches ChromaDB for relevant text using embeddings."""
-    query_embedding = generate_embedding(query_text)
-    if query_embedding is None:
-        return "⚠️ Error generating query embedding."
-
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
-        include=["metadatas", "distances"]
     )
 
-    if not results or "metadatas" not in results or not results["metadatas"][0]:
-        return "❌ No similar documents found."
+# Access the index
+index = pc.Index(index_name)
+print(f"Pinecone index '{index_name}' initialized successfully!")
 
-    print("\n🔍 Search Results:")
-    for i, (meta, distance) in enumerate(zip(results["metadatas"][0], results["distances"][0])):
-        if meta is None:
-            print(f"❌ Result {i + 1}: Metadata is missing (None).")
-            continue  # Skip None values safely
+# Upsert embeddings with metadata into Pinecone
+print("Upserting embeddings with metadata into Pinecone...")
+try:
+    index.upsert(data_to_upsert)
+    print(f"Successfully upserted {len(data_to_upsert)} embeddings into '{index_name}'!")
+except Exception as e:
+    print(f"Error during upsert: {e}")
 
-        text = meta.get("text", "❌ No Text Available")  # Retrieve text safely
-        print(f"{i + 1}. {text[:100]}... (Similarity Score: {distance:.4f})\n")
 
+def debug_pinecone_upsert(index, example_ids=None):
+    """
+    Fetches and prints metadata and first 5 embedding values for given vector IDs from Pinecone.
 
-# Example usage: Query ChromaDB
-query = "How to manage stress?"
-search_similar_text(query)
+    Args:
+        index: Pinecone index object
+        example_ids: List of vector IDs to fetch and debug. Defaults to first 2 known IDs.
+    """
+    if example_ids is None:
+        example_ids = [f"pdf-text-{i}" for i in range(2)]  # Adjust range or pass explicit ids
+
+    # Fetch vectors by IDs
+    fetched = index.fetch(ids=example_ids)
+
+    vectors = fetched.get("vectors", {})
+    print(f"📌 Retrieved {len(vectors)} vectors from Pinecone")
+
+    for i, (vec_id, vec_data) in enumerate(vectors.items()):
+        metadata = vec_data.get("metadata", {})
+        embedding = vec_data.get("values", [])
+
+        print(f"\n🗂️ Metadata {i + 1} (ID: {vec_id}): {metadata}")
+        print(f"🔢 Embedding {i + 1} (First 5 values): {embedding[:5]} ... [truncated]")
+
+debug_pinecone_upsert(index)  # Will fetch first 2 by default

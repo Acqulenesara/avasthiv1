@@ -7,11 +7,46 @@ from chromadb.utils import embedding_functions
 import nltk
 from fastapi.middleware.cors import CORSMiddleware
 from transformers import pipeline
-import sqlite3
+
 from passlib.context import CryptContext
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import jwt
 from datetime import datetime, timedelta
+from sqlalchemy import Column, Integer, String, create_engine, MetaData, Table
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from databases import Database
+from pinecone import Pinecone, ServerlessSpec
+
+
+# PostgreSQL URL
+DATABASE_URL = os.getenv("POSTGRES_URL", "postgresql+asyncpg://postgres:acqulene@localhost:5432/mental_health_bot")
+
+# SQLAlchemy setup
+Base = declarative_base()
+metadata = MetaData()
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    password = Column(String)
+
+class ChatInteraction(Base):
+    __tablename__ = "interactions"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, index=True)
+    query = Column(String)
+    response = Column(String)
+    timestamp = Column(String, default=datetime.utcnow().isoformat)
+
+# Use databases for async DB interaction
+database = Database(DATABASE_URL)
+engine = create_engine(DATABASE_URL.replace("asyncpg", "psycopg2"))
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Create tables (you can also run Alembic migrations)
+Base.metadata.create_all(bind=engine)
 
 
 # Download necessary NLTK data
@@ -47,10 +82,6 @@ print(f"ChromaDB Version: {chromadb.__version__}")
 EMBED_MODEL = "all-MiniLM-L6-v2"
 embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
 
-# Initialize ChromaDB with embedding functions
-chroma_client = chromadb.PersistentClient(path="../chroma_db")
-collection_name = "pdf_text_collection"
-collection = chroma_client.get_or_create_collection(name=collection_name, embedding_function=embedding_func)
 
 # OpenAI Assistant Setup
 client = openai.OpenAI()
@@ -62,49 +93,26 @@ assistant = client.beta.assistants.create(
 )
 thread = client.beta.threads.create()
 
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client["mental_health_bot"]
-users_collection = db["users"]
-interactions_collection = db["interactions"]
-lifestyle_collection = db["lifestyle"]
+pinecone_api_key = "pcsk_5D1v7g_MTTv3ZifoaK9ffLM5kZMyuL3HN2Kjc6jWDjjt6jHdWFqftdFHdc2AyfHBqXTKqQ"
+cloud_region = "us-east-1"
+embedding_dimension = 1536
+index_name = "newindex"
 
+global query_history
+query_history = ""
 
-#
-# # SQLite Database Setup
-# conn = sqlite3.connect("users.db", check_same_thread=False)
-# cursor = conn.cursor()
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS users (
-#         id INTEGER PRIMARY KEY AUTOINCREMENT,
-#         username TEXT UNIQUE,
-#         password TEXT
-#     )
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS interactions (
-#         id INTEGER PRIMARY KEY AUTOINCREMENT,
-#         username TEXT,
-#         query TEXT,
-#         response TEXT,
-#         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-#     )
-# """)
-# cursor.execute("""
-#     CREATE TABLE IF NOT EXISTS lifestyle (
-#         id INTEGER PRIMARY KEY AUTOINCREMENT,
-#         username TEXT,
-#         sleep TEXT,
-#         exercise TEXT,
-#         diet TEXT,
-#         social TEXT,
-#         work_life_balance TEXT
-#     )
-# """)
-# conn.commit()
+# Initialize Pinecone
+pc = Pinecone(api_key=pinecone_api_key)
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        name=index_name,
+        dimension=embedding_dimension,
+        metric="cosine",
+        spec=ServerlessSpec(cloud="gcp", region=cloud_region.split("-")[1]),
+    )
+index = pc.Index(index_name)
+
 
 # Password Hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -130,26 +138,35 @@ class UserRegister(BaseModel):
     username: str
     password: str
 
+@app.on_event("startup")
+async def startup():
+    await database.connect()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await database.disconnect()
+
+
 @app.post("/register")
 async def register_user(user: UserRegister):
-    if await users_collection.find_one({"username": user.username}):
+    query = "SELECT * FROM users WHERE username = :username"
+    existing_user = await database.fetch_one(query=query, values={"username": user.username})
+    if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
-    hashed_password = get_password_hash(user.password)
-    await users_collection.insert_one({
-        "username": user.username,
-        "password": hashed_password
-    })
-    return {"message": "User registered successfully"}
 
+    hashed_password = get_password_hash(user.password)
+    insert_query = "INSERT INTO users (username, password) VALUES (:username, :password)"
+    await database.execute(query=insert_query, values={"username": user.username, "password": hashed_password})
+    return {"message": "User registered successfully"}
 
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = await users_collection.find_one({"username": form_data.username})
+    query = "SELECT * FROM users WHERE username = :username"
+    user = await database.fetch_one(query=query, values={"username": form_data.username})
     if not user or not verify_password(form_data.password, user["password"]):
         raise HTTPException(status_code=400, detail="Incorrect username or password")
     access_token = create_access_token(data={"sub": user["username"]})
     return {"access_token": access_token, "token_type": "bearer"}
-
 
 # Pydantic model for request handling
 
@@ -176,21 +193,79 @@ def analyze_sentiment_transformers(text):
     else:
         return "negative"
 
+# Replace get_embedding with OpenAI Embedding
+def get_embedding(text: str) -> list[float]:
+    try:
+        response = openai.embeddings.create(
+            model="text-embedding-ada-002",
+            input=text
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        print("❌ Failed to generate embedding:", e)
+        return []
+
+
 # Function to retrieve similar documents from ChromaDB
-def search_similar_text(query_text, top_k=10, max_distance=1.0):
-    query_embedding = embedding_func([query_text])
-    results = collection.query(
-        query_embeddings=[query_embedding[0]],
-        n_results=top_k,
-        include=["metadatas", "distances"]
+def search_similar_text(query_text, top_k=10, score_threshold=0.8):
+    query_vector = get_embedding(query_text)
+
+    if not query_vector:
+        return "No similar documents found."
+
+    try:
+        pinecone_results = index.query(
+            vector=query_vector,
+            top_k=top_k,
+            include_metadata=True
+        )
+
+        retrieved_contexts = []
+        for match in pinecone_results.matches:
+            if match.score >= score_threshold and "text" in match.metadata:
+                retrieved_contexts.append(match.metadata["text"])
+
+        return "\n".join(retrieved_contexts) if retrieved_contexts else "No similar documents found."
+
+    except Exception as e:
+        print("❌ Pinecone query failed:", e)
+        return "No similar documents found."
+
+
+def extract_context_from_text(text: str) -> dict:
+    prompt = f"""
+    You are an NLP assistant helping another assistant understand emotional context.
+
+    Task: From the user's message, extract:
+    - scenario: one of ["family_conflict", "academic_stress", "work_pressure", "relationship_issue", "financial_stress", "health_anxiety", "social_anxiety", "existential_crisis", "grief_or_loss", "self_doubt"]
+    - role: their position in the situation (e.g., daughter, son, student, employee, partner, friend, patient)
+
+    Return a JSON object only, like:
+    {{ "scenario": "relationship_issue", "role": "partner" }}
+
+    Example:
+    Text: "I got into a fight with my dad. He doesn't understand me."
+    -> {{ "scenario": "family_conflict", "role": "daughter" }}
+
+    Text: "I failed two tests and I don't think I can pass this semester."
+    -> {{ "scenario": "academic_stress", "role": "student" }}
+
+    Now analyze this:
+    Text: "{text}"
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3
     )
 
-    retrieved_contexts = []
-    for meta, distance in zip(results.get("metadatas", [[]])[0], results.get("distances", [[]])[0]):
-        if meta and distance < max_distance:
-            retrieved_contexts.append(meta.get("text", "No text available"))
-
-    return "\n".join(retrieved_contexts) if retrieved_contexts else "No similar documents found."
+    import json
+    try:
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print("❌ JSON parsing failed", e)
+        return {"scenario": "unknown", "role": "user"}
 
 
 def extract_username_from_token(token: str):
@@ -218,11 +293,23 @@ async def handle_query(payload: QueryPayload, token: str = Depends(oauth2_scheme
         sentiment = analyze_sentiment_transformers(query)
 
         # Adjust assistant instructions based on sentiment
+        # Extract scenario and user role using GPT
+        context = extract_context_from_text(query)
+        scenario = context.get("scenario", "unknown")
+        role = context.get("role", "user")
+
+        # Build dynamic instructions
         sentiment_instruction = {
             "positive": "Maintain an engaging and encouraging tone.",
             "neutral": "Respond normally with helpful advice.",
-            "negative": "Use a compassionate and supportive tone. Offer stress-relief tips briefly.Keep it short."
-        }.get(sentiment, "Respond normally.Be concise and to the point.")
+            "negative": "Use a compassionate and supportive tone. Offer stress-relief tips briefly. Keep it short."
+        }.get(sentiment, "Respond normally. Be concise and to the point.")
+
+        instructions = (
+            f"You are Arohi, an AI mental health assistant. "
+            f"The user is going through a {scenario.replace('_', ' ')} situation and is acting as a {role}. "
+            f"The user has a premium account. {sentiment_instruction}"
+        )
 
         # Create a message in the thread
         message = client.beta.threads.messages.create(
@@ -240,6 +327,17 @@ async def handle_query(payload: QueryPayload, token: str = Depends(oauth2_scheme
             stream.until_done()
             response_text = stream.get_final_messages()[0].content[0].text.value
 
+            insert_query = """
+            INSERT INTO interactions (username, query, response, timestamp)
+            VALUES (:username, :query, :response, :timestamp)
+            """
+            await database.execute(query=insert_query, values={
+                "username": username,
+                "query": query,
+                "response": response_text,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+
         return {"thread_id": current_thread_id, "response": response_text}
 
 
@@ -249,6 +347,12 @@ async def handle_query(payload: QueryPayload, token: str = Depends(oauth2_scheme
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
 
+@app.get("/chat-history")
+async def get_chat_history(token: str = Depends(oauth2_scheme)):
+    username = extract_username_from_token(token)
+    query = "SELECT * FROM interactions WHERE username = :username ORDER BY timestamp DESC LIMIT 100"
+    chats = await database.fetch_all(query=query, values={"username": username})
+    return {"history": [dict(chat) for chat in chats]}
 
 # Print available routes properly
 print("\nAvailable routes:")
