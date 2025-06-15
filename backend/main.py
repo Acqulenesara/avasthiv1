@@ -76,11 +76,11 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Ensure correct ChromaDB version
-print(f"ChromaDB Version: {chromadb.__version__}")
-
-# Define embedding function using SentenceTransformers
-EMBED_MODEL = "all-MiniLM-L6-v2"
-embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
+# print(f"ChromaDB Version: {chromadb.__version__}")
+#
+# # Define embedding function using SentenceTransformers
+# EMBED_MODEL = "all-MiniLM-L6-v2"
+# embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
 
 
 # OpenAI Assistant Setup
