@@ -1,0 +1,18 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+motor
+openai
+transformers
+chromadb
+nltk
+passlib[bcrypt]
+python-jose
+<<<<<<< HEAD
+jwt
+sentence_transformers
+torch
+python-multipart
+=======
+
+>>>>>>> a05199c (changes)
