@@ -2,8 +2,6 @@ from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 import os
 import openai
-import chromadb
-from chromadb.utils import embedding_functions
 import nltk
 from fastapi.middleware.cors import CORSMiddleware
 from transformers import pipeline
@@ -74,14 +72,6 @@ app.add_middleware(
 SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-# Ensure correct ChromaDB version
-# print(f"ChromaDB Version: {chromadb.__version__}")
-#
-# # Define embedding function using SentenceTransformers
-# EMBED_MODEL = "all-MiniLM-L6-v2"
-# embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
-
 
 # OpenAI Assistant Setup
 client = openai.OpenAI()
