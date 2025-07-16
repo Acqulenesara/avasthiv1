@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emotion Music Player</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      background: #f2f2f2;
+      padding: 50px;
+    }
+    .emoji-container {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 30px;
+    }
+    .emoji-button {
+      font-size: 4rem;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+    .emoji-button:hover {
+      transform: scale(1.2);
+    }
+    .label {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎵 How are you feeling today?</h1>
+  <div class="emoji-container">
+    <div onclick="redirectToYouTube('happy')">
+      <div class="emoji-button">😊</div>
+      <div class="label">Happy</div>
+    </div>
+    <div onclick="redirectToYouTube('sad')">
+      <div class="emoji-button">😢</div>
+      <div class="label">Sad</div>
+    </div>
+    <div onclick="redirectToYouTube('angry')">
+      <div class="emoji-button">😠</div>
+      <div class="label">Angry</div>
+    </div>
+    <div onclick="redirectToYouTube('relaxed')">
+      <div class="emoji-button">😌</div>
+      <div class="label">Relaxed</div>
+    </div>
+    <div onclick="redirectToYouTube('anxious')">
+      <div class="emoji-button">😨</div>
+      <div class="label">Anxious</div>
+    </div>
+  </div>
+  <script>
+    const playlists = {
+      happy: "https://music.youtube.com/watch?v=q0hyYWKXF0Q&list=RDCLAK5uy_kJWGcrtTC_zrbD6rKkBvOcht_vzijhX1A",
+      sad: "https://www.youtube.com/playlist?list=PLrAl6ZYqGPP0fXJo6_cVjkrZJNiTvdKOk",
+      angry: "https://www.youtube.com/playlist?list=PLrAl6ZYqGPP0DFfEGzpyFOhiQyO_fzEP4",
+      relaxed: "https://www.youtube.com/playlist?list=PLrAl6ZYqGPP0EAjzwJOvMdEgPnNzN3Z8C",
+      anxious: "https://www.youtube.com/playlist?list=PLrAl6ZYqGPP2vAMVHzLg7PQOBJsZlYRzE"
+    };
+    function redirectToYouTube(mood) {
+      const url = playlists[mood];
+      if (url) {
+        window.open(url, '_blank');
+      } else {
+        alert("Playlist not found!");
+      }
+    }
+  </script>
+</body>
+</html>

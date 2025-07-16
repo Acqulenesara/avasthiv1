@@ -4,5 +4,7 @@
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/backend" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/frontend" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/journal/journ" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/meditation/Zen-Mind" vcs="Git" />
   </component>
 </project>

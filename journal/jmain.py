@@ -1,154 +1,158 @@
-# main.py - Fixed Personal Journal Application
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional
+import jwt
+from datetime import datetime, timedelta, date
+import os
+
+# Imports from your modules
 from auth import create_user, login_user
 from enhanced_db import get_connection, get_user_stats, fetch_entries_by_user
 from journal import submit_entry
 from enhanced_plot import plot_comprehensive_analysis
 
+# JWT config
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+security = HTTPBearer()
 
-def display_menu():
-    print("\n" + "=" * 50)
-    print("📔 PERSONAL JOURNAL APPLICATION")
-    print("=" * 50)
-    print("1. Login")
-    print("2. Create New Account")
-    print("3. Exit")
-    print("-" * 50)
+# App setup
+app = FastAPI(
+    title="Personal Journal API (Web Version)",
+    description="A journaling platform with mood tracking and sentiment analysis.",
+    version="2.0"
+)
 
+# CORS settings (allow React frontend for example)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def user_menu(user_info):
-    while True:
-        print(f"\n📔 Welcome back, {user_info['username']}!")
-        print("=" * 40)
-        print("1. Write New Journal Entry")
-        print("2. View Analytics Dashboard")
-        print("3. View Recent Entries")
-        print("4. Logout")
-        print("-" * 40)
+# Pydantic Models
+class RegisterUser(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
 
-        choice = input("Choose an option (1-4): ").strip()
+class LoginUser(BaseModel):
+    username: str
+    password: str
 
-        if choice == '1':
-            write_journal_entry(user_info['id'])
-        elif choice == '2':
-            view_analytics(user_info['id'])
-        elif choice == '3':
-            view_recent_entries(user_info['id'])
-        elif choice == '4':
-            print("👋 Goodbye! Keep journaling!")
-            break
-        else:
-            print("❌ Invalid choice. Please try again.")
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user_id: int
+    username: str
 
+class JournalEntry(BaseModel):
+    mood: str
+    entry: str
 
-def write_journal_entry(user_id):
-    print("\n✍️  NEW JOURNAL ENTRY")
-    print("-" * 30)
+class EntryPreview(BaseModel):
+    id: int
+    entry_date: date
+    mood: str
+    sentiment_score: float
+    preview: str
 
-    mood = input("How are you feeling today? ")
-    print("\nWrite your journal entry (press Enter twice when done):")
+# JWT utility
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-    lines = []
-    while True:
-        line = input()
-        if line == "":
-            if lines and lines[-1] == "":
-                break
-            lines.append(line)
-        else:
-            lines.append(line)
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        return {"user_id": payload["user_id"], "username": payload["username"]}
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-    entry_text = "\n".join(lines[:-1])  # Remove last empty line
+# Routes
+@app.post("/auth/register")
+async def register(user: RegisterUser):
+    success, result = create_user(user.username, user.email, user.password)
+    if success:
+        return {"message": "Account created", "user_id": result}
+    raise HTTPException(status_code=400, detail=result)
 
-    if entry_text.strip():
-        try:
-            conn = get_connection()
-            sentiment = submit_entry(conn, user_id, mood, entry_text)
-            conn.close()
+@app.post("/auth/login", response_model=Token)
+async def login(user: LoginUser):
+    success, result = login_user(user.username, user.password)
+    if not success:
+        raise HTTPException(status_code=401, detail=result)
 
-            print(f"\n✅ Entry saved! Sentiment score: {sentiment:.2f}")
+    access_token = create_access_token(
+        data={"user_id": result["id"], "username": result["username"]}
+    )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": result["id"],
+        "username": result["username"]
+    }
 
-            if sentiment > 0.1:
-                print("😊 Your entry has a positive sentiment!")
-            elif sentiment < -0.1:
-                print("😔 Your entry has a negative sentiment.")
-            else:
-                print("😐 Your entry has a neutral sentiment.")
-        except Exception as e:
-            print(f"❌ Error saving entry: {e}")
-    else:
-        print("❌ Entry cannot be empty!")
-
-
-def view_analytics(user_id):
-    print("\n📊 Loading your analytics dashboard...")
+@app.post("/journal/entry")
+async def create_entry(entry: JournalEntry, current_user: dict = Depends(get_current_user)):
     try:
         conn = get_connection()
-        plot_comprehensive_analysis(conn, user_id)
+        sentiment = submit_entry(conn, current_user["user_id"], entry.mood, entry.entry)
         conn.close()
+
+        feedback = "neutral sentiment"
+        if sentiment > 0.1:
+            feedback = "positive sentiment"
+        elif sentiment < -0.1:
+            feedback = "negative sentiment"
+
+        return {
+            "message": "Entry saved successfully",
+            "sentiment_score": sentiment,
+            "sentiment_feedback": feedback
+        }
     except Exception as e:
-        print(f"❌ Error loading analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-def view_recent_entries(user_id):
+@app.get("/journal/recent", response_model=List[EntryPreview])
+async def recent_entries(current_user: dict = Depends(get_current_user)):
     try:
         conn = get_connection()
-        entries = fetch_entries_by_user(conn, user_id, limit=5)
+        entries = fetch_entries_by_user(conn, current_user["user_id"], limit=5)
         conn.close()
 
-        if entries:
-            print("\n📖 YOUR RECENT ENTRIES")
-            print("=" * 50)
-            for i, entry in enumerate(entries, 1):
-                date, sentiment, mood, text = entry
-                print(f"\n{i}. {date} | Mood: {mood} | Sentiment: {sentiment:.2f}")
-                print("-" * 30)
-                # Show first 100 characters of entry
-                preview = text[:100] + "..." if len(text) > 100 else text
-                print(preview)
-        else:
-            print("\n📝 No entries found. Start writing your first entry!")
+        previews = []
+        for i, (date_, sentiment, mood, text) in enumerate(entries):
+            preview_text = text[:100] + "..." if len(text) > 100 else text
+            previews.append({
+                "id": i + 1,
+                "entry_date": date_,
+                "mood": mood,
+                "sentiment_score": sentiment,
+                "preview": preview_text
+            })
+
+        return previews
     except Exception as e:
-        print(f"❌ Error fetching entries: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch entries: {e}")
 
+@app.get("/journal/analytics")
+async def get_analytics(current_user: dict = Depends(get_current_user)):
+    try:
+        conn = get_connection()
+        plot_comprehensive_analysis(conn, current_user["user_id"])  # Saves the plot locally
+        conn.close()
+        return {"message": "Analytics plotted successfully (check server directory)."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analytics error: {e}")
 
-def main():
-    print("🚀 Initializing Personal Journal Application...")
-
-    while True:
-        display_menu()
-        choice = input("Choose an option (1-3): ").strip()
-
-        if choice == '1':
-            # Login
-            username = input("Username: ")
-            password = input("Password: ")
-
-            success, result = login_user(username, password)
-            if success:
-                user_menu(result)
-            else:
-                print(f"❌ {result}")
-
-        elif choice == '2':
-            # Create account
-            print("\n📝 CREATE NEW ACCOUNT")
-            print("-" * 25)
-            username = input("Choose a username: ")
-            email = input("Enter your email: ")
-            password = input("Choose a password: ")
-
-            success, result = create_user(username, email, password)
-            if success:
-                print(f"✅ Account created successfully! User ID: {result}")
-            else:
-                print(f"❌ {result}")
-
-        elif choice == '3':
-            print("👋 Thank you for using Personal Journal App!")
-            break
-        else:
-            print("❌ Invalid choice. Please try again.")
-
-
-if __name__ == "__main__":
-    main()
+@app.get("/")
+def root():
+    return {"message": "Welcome to Personal Journal API!"}
